@@ -1,3 +1,11 @@
+#####################################
+#
+#   28.07.2-21
+#   - Changed for UTMv4
+#   - Some fixes
+#
+#####################################
+
 import requests
 import re
 import datetime
@@ -8,65 +16,14 @@ from config import *
 from time import sleep
 from requests.adapters import HTTPAdapter
 
-
-
-S = 2 # Если столько раз подряд хост лежит, считаем его упавшим
+# Если столько раз подряд хост лежит, считаем его упавшим
+S = 2 
+# Время в секундах между попытками проверить узлы
 sleep_time = 2
+#  За сколько дней предупреждать об истечении ключей
 expire = 20
 
-
-def log(msg):
-    s = str(datetime.datetime.today())+': '+str(msg)
-    print(s)
-
-def load_url(url):
-    try:
-        s = requests.Session()
-        s.mount('http://',HTTPAdapter(max_retries=3))
-        return s.get(url)
-    except :
-        pass
-    return  None
-
-
-bot = telebot.TeleBot(token, threaded = True, num_threads = 5)
-
-def telegram():
-
-    # logger = telebot.logger
-    telebot.logger.setLevel(logging.CRITICAL)
-
-    while True:
-        try:
-            bot._TeleBot__non_threaded_polling(none_stop = False)
-        except Exception as e:
-            print (e)
-            pass
-
-@bot.message_handler(content_types=['text'])
-def get_text_messages(message):
-    msg = ''
-    if 'utm_status' in message.text.lower():
-        t = worklist
-        for i in t:
-            string = '*{}* {} \n *RSA* : {}, *GOST* : {}'
-            if t[i].state == False :
-                state = '❌ недоступен'
-            else:
-                state = '✅ доступен'
-            msg = msg + string.format(  t[i].name,
-                                        state,
-                                        t[i].rsa,
-                                        t[i].gost ) + '\n\n'
-        try:
-            bot.send_message(message.chat.id, msg, parse_mode='Markdown' )
-        except:
-            log(':(')
-        del(t)
-
-
-
-class Utm:
+class utm:
 
     def __init__(self,name,url):
 
@@ -84,14 +41,13 @@ class Utm:
 
     def update(self):
 
-        p = parse_utm(self.url,self.name)
-        if p['версия'] !=''     : self.version = p['версия']
-        if p['лицензия'] != ''  : self.license = p['лицензия']
-        if p['чеки'] != ''      : self.checks = p['чеки']
-        if p['рса'] != ''       : self.rsa = p['рса']
-        if p['гост'] != ''      : self.gost = p['гост']
-        if p['доступ'] !=''     : self.state = p['доступ']
-        #if self.state == False  : self.offlinecounter = self.offlinecounter+1
+        p = parse_utm(self.url, self.name)
+        self.version = p['версия']
+        self.license = p['лицензия']
+        self.checks = p['чеки']
+        self.rsa = p['рса']
+        self.gost = p['гост']
+        self.state = p['доступ']
 
     def report(self):
         res = []
@@ -106,6 +62,56 @@ class Utm:
         res.append(self.offlinecounter)
         return res
 
+def log(msg):
+    print(
+        f'{datetime.datetime.today()}: {msg}'
+    )
+
+def load_url(url):
+    try:
+        return requests.get(url+'/api/info/list')
+    except Exception as e:
+        log(f'Не удалось получить ответ, ошибка: {e}')
+    return  None
+
+bot = telebot.TeleBot(token, threaded = True, num_threads = 5)
+
+def telegram():
+    telebot.logger.setLevel(logging.CRITICAL)
+    while True:
+        try:
+            bot.polling()
+        except Exception as e:
+            print(e)
+            pass
+
+@bot.message_handler(content_types=['text'])
+def get_text_messages(message):
+    msg = ''
+    if 'utm_status' in message.text.lower():
+        log('Отправляем информацию по всем узлам')
+        t = worklist
+        for i in t:
+            if t[i].state == False :
+                state = '🟥 '
+            else:
+                state = '🟩 '
+            string = '{}*{}*\n*РСА*: {}\n*ГОСТ*: {}\n{}\n'
+            msg = msg + string.format(  
+                state,
+                t[i].name,
+                t[i].rsa,
+                t[i].gost,
+                '- '*8 
+            )
+        try:
+            bot.send_message(message.chat.id, msg, parse_mode='Markdown' )
+        except:
+            log(':(')
+
+
+
+
 def parse_utm(url,name):
     result = {  'версия':'',
                 'лицензия':'',
@@ -115,43 +121,19 @@ def parse_utm(url,name):
                 'доступ':False}
 
     utm_url = url
-    log(f'Парсим утм {name} ({url})')
+    log(f'Парсинг {name} ({url})')
     try:
-        r = load_url(utm_url)
-        res = re.search(r'.*ПО.*">(\d.\d+\.\d+)',r.text)
-        if res is not None:
-            result['версия'] = res.group(1)
-        else:
-            result['версия'] = 'ошибка парсинга'
-
-        res = re.search(r'деятельности (.*)</div></div>',r.text)
-        if res is not None:
-            result['лицензия'] = res.group(1)
-        else:
-            result['лицензия'] = 'ошибка парсинга'
-
-        res = re.search(r'чеки.*">(.*)</div></div>',r.text)
-        if res is not None:
-            result['чеки'] = res.group(1)
-        else:
-            result['чеки'] = 'ошибка парсинга'
-
-        res = re.search(r'RSA.* по ([-0-9]+)\s',r.text)
-        if res is not None:
-            result['рса'] = res.group(1)
-        else:
-            result['рса'] = 'ошибка парсинга'
-
-        res = re.search(r'ГОСТ.* по ([-0-9]+)\s',r.text)
-        if res is not None:
-            result['гост'] = res.group(1)
-        else:
-            result['гост'] = 'ошибка парсинга'
-
+        r = load_url(utm_url).json()
+        
+        result['версия'] = r.get('version')
+        result['лицензия'] = r.get('license')
+        result['чеки'] = 'пока без чеков :)'
+        tmp = r.get('rsa')
+        result['рса'] = tmp.get('expireDate')
+        tmp = r.get('gost')
+        result['гост'] = tmp.get('expireDate')
         result['доступ'] = True
-        # return result
-        del(r)
-        del(res)
+
         log('Успешно')
     except:
         result['доступ'] = False
@@ -159,7 +141,8 @@ def parse_utm(url,name):
     return result
 
 def check_date(date):
-    s = date.split('-')
+    d=re.search('(\S+)\s', date).groups(1)[0]
+    s = d.split('-')
     then = datetime.date(int(s[0]),int(s[1]),int(s[2]))
     today = datetime.date.today()
     return (then - today).days
@@ -178,11 +161,11 @@ def ending(n):
 
 def main():
     for name in utm_list:
-        worklist[name] = Utm (name, utm_list[name])
+        worklist[name] = utm(name, utm_list[name])
 
     while True:
         message = []
-
+        # 🟢🔴🟠
         for utm_item in worklist:
             msg = ''
             worklist[utm_item].update()
@@ -192,41 +175,37 @@ def main():
                 gost = check_date(p.gost)
                 p.notif_date = datetime.date.today()
                 if rsa <= 0 :
-                    message.append('.. РСА на *{}* закончился'.format(p.name))
+                    message.append('🔴 *{}*\n _РСА закончился_\n'.format(p.name))
                 elif rsa <= expire :
-                    message.append('❗️ РСА на *{}* заканчивается через {}'.format(p.name,ending(rsa)))
+                    message.append('🟡 *{}*\n  _РСА заканчивается ({})_\n'.format(p.name,ending(rsa)))
 
                 if gost <= 0 :
-                    message.append('.. ГОСТ на *{}* закончился'.format(p.name))
+                    message.append('🔴 *{}*\n _ГОСТ закончился_'.format(p.name))
                 elif gost <= expire :
-                    message.append('❗ГОСТ на *{}* заканчивается через {}'.format(p.name,ending(gost)))
+                    message.append('🟡 *{}*\n _ГОСТ заканчивается ({})_\n'.format(p.name,ending(gost)))
 
             if p.state == False and p.offlinecounter == S:
-                message.append('❌ *{}* Недоступен'.format(p.name))
+                message.append('❌ *{}*'.format(p.name))
             elif p.state == True and p.offlinecounter >= S:
-                message.append('✅ *{}* Доступен'.format(p.name))
+                message.append('✅ *{}*'.format(p.name))
 
             if p.state == True   :
                 worklist[utm_item].offlinecounter = 0
             else:
                 worklist[utm_item].offlinecounter = worklist[utm_item].offlinecounter + 1
-            del(utm_item)
 
         if len(message) > 0:
             for line in message:
                 msg = msg + line+'\n'
 
         if len(msg) > 0 :
-            log(str(datetime.datetime.today())+ ' Send message to telegram')
             try :
                 bot.send_message( chat_id ,msg , parse_mode='Markdown')
-                log('Отправка сообщения')
+                log('Отправка сообщения с изменениями')
             except:
-                log('Отправка не удалась')
-        del(msg)
+                log('Неудачная отправка')
         sleep(sleep_time)
 
-global worklist
 worklist = {}
 tele_thread = threading.Thread(target = telegram)
 tele_thread.start()
